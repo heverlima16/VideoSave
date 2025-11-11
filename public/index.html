@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 700px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        .status {
+            text-align: center;
+            padding: 10px;
+            background: #4caf50;
+            color: white;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        .status.offline { background: #f44336; }
+        label {
+            display: block;
+            color: #555;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102,126,234,0.4);
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .btn-download {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+        .video-info {
+            display: none;
+            margin-top: 30px;
+            padding: 25px;
+            background: #f5f7fa;
+            border-radius: 15px;
+        }
+        .video-info.show { display: block; }
+        .video-info img {
+            width: 100%;
+            border-radius: 10px;
+            margin-bottom: 15px;
+        }
+        .video-title {
+            font-size: 1.3em;
+            color: #333;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .video-details {
+            color: #666;
+            margin-bottom: 15px;
+        }
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            color: #667eea;
+            margin: 20px 0;
+        }
+        .loading.show { display: block; }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .message {
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+        }
+        .message.show { display: block; }
+        .error {
+            background: #fee;
+            color: #c33;
+            border-left: 4px solid #c33;
+        }
+        .success {
+            background: #efe;
+            color: #3c3;
+            border-left: 4px solid #3c3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 YouTube Downloader</h1>
+        <div class="status" id="status">Verificando servidor...</div>
+        
+        <label>🔗 URL del video de YouTube:</label>
+        <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=...">
+        <button id="getInfo">📊 Obtener Información</button>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p id="loadingText">Procesando...</p>
+        </div>
+        
+        <div class="message error" id="error"></div>
+        <div class="message success" id="success"></div>
+        
+        <div class="video-info" id="videoInfo">
+            <img id="thumbnail" src="" alt="Miniatura">
+            <div class="video-title" id="title"></div>
+            <div class="video-details">
+                <div>👤 <span id="author"></span></div>
+                <div>⏱️ <span id="duration"></span></div>
+            </div>
+            <label>📹 Calidad:</label>
+            <select id="quality">
+                <option value="">Mejor calidad</option>
+            </select>
+            <button class="btn-download" id="download">⬇️ Descargar Video</button>
+        </div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:3000/api';
+        const url = document.getElementById('url');
+        const getInfo = document.getElementById('getInfo');
+        const download = document.getElementById('download');
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loadingText');
+        const error = document.getElementById('error');
+        const success = document.getElementById('success');
+        const videoInfo = document.getElementById('videoInfo');
+        const status = document.getElementById('status');
+        let currentUrl = '';
+
+        async function checkServer() {
+            try {
+                const res = await fetch(`${API}/health`);
+                if (res.ok) {
+                    status.textContent = '✅ Servidor Online';
+                    status.classList.remove('offline');
+                }
+            } catch (e) {
+                status.textContent = '❌ Servidor Offline';
+                status.classList.add('offline');
+            }
+        }
+
+        getInfo.addEventListener('click', async () => {
+            const videoUrl = url.value.trim();
+            if (!videoUrl) {
+                showError('Ingresa una URL válida');
+                return;
+            }
+
+            hideMessages();
+            videoInfo.classList.remove('show');
+            showLoading('Obteniendo información...');
+            getInfo.disabled = true;
+
+            try {
+                const res = await fetch(`${API}/video-info`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: videoUrl })
+                });
+
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+
+                currentUrl = videoUrl;
+                document.getElementById('thumbnail').src = data.thumbnail;
+                document.getElementById('title').textContent = data.title;
+                document.getElementById('author').textContent = data.author;
+                document.getElementById('duration').textContent = formatDuration(data.duration);
+
+                const quality = document.getElementById('quality');
+                quality.innerHTML = '<option value="">Mejor calidad</option>';
+                data.formats.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f.format_id;
+                    opt.textContent = `${f.resolution} - ${f.quality} (${f.filesize} MB)`;
+                    quality.appendChild(opt);
+                });
+
+                videoInfo.classList.add('show');
+                showSuccess('✅ Información obtenida');
+            } catch (e) {
+                showError(e.message);
+            } finally {
+                hideLoading();
+                getInfo.disabled = false;
+            }
+        });
+
+        download.addEventListener('click', async () => {
+            const format_id = document.getElementById('quality').value;
+            hideMessages();
+            showLoading('Descargando... puede tardar varios minutos');
+            download.disabled = true;
+
+            try {
+                const res = await fetch(`${API}/download`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: currentUrl, format_id })
+                });
+
+                if (!res.ok) {
+                    const data = await res.json();
+                    throw new Error(data.error);
+                }
+
+                const blob = await res.blob();
+                const downloadUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = `video_${Date.now()}.mp4`;
+                a.click();
+                URL.revokeObjectURL(downloadUrl);
+
+                showSuccess('✅ Video descargado!');
+            } catch (e) {
+                showError(e.message);
+            } finally {
+                setTimeout(() => {
+                    hideLoading();
+                    download.disabled = false;
+                }, 2000);
+            }
+        });
+
+        function formatDuration(sec) {
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function showLoading(text) {
+            loadingText.textContent = text;
+            loading.classList.add('show');
+        }
+
+        function hideLoading() {
+            loading.classList.remove('show');
+        }
+
+        function showError(msg) {
+            error.textContent = msg;
+            error.classList.add('show');
+        }
+
+        function showSuccess(msg) {
+            success.textContent = msg;
+            success.classList.add('show');
+        }
+
+        function hideMessages() {
+            error.classList.remove('show');
+            success.classList.remove('show');
+        }
+
+        checkServer();
+        setInterval(checkServer, 30000);
+    </script>
+</body>
+</html>
