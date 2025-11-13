@@ -412,6 +412,40 @@
             color: #0a84ff;
         }
         
+        .settings-section {
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .location-selector {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .location-selector input {
+            margin-bottom: 0;
+        }
+        
+        .btn-secondary {
+            padding: 16px 24px;
+            background: rgba(72, 72, 74, 0.6);
+            white-space: nowrap;
+        }
+        
+        .btn-secondary:hover:not(:disabled) {
+            background: rgba(72, 72, 74, 0.8);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+        }
+        
+        .help-text {
+            font-size: 0.85em;
+            color: #86868b;
+            line-height: 1.5;
+        }
+        
         @media (max-width: 640px) {
             .container {
                 padding: 32px 24px;
@@ -428,13 +462,17 @@
             .video-meta {
                 grid-template-columns: 1fr;
             }
+            
+            .location-selector {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>VideoSave</h1>
-        <p class="subtitle">Descarga videos hasta 4K con audio incluido</p>
+        <p class="subtitle">YouTube • TikTok • Instagram • Hasta 4K</p>
         
         <div style="text-align: center;">
             <span class="status-badge" id="status">Verificando servidor</span>
@@ -494,6 +532,15 @@
             </button>
         </div>
         
+        <div class="settings-section">
+            <label>📁 Ubicación de descarga</label>
+            <div class="location-selector">
+                <input type="text" id="downloadPath" readonly placeholder="Usar ubicación predeterminada del navegador">
+                <button id="choosePath" class="btn-secondary">Elegir Carpeta</button>
+            </div>
+            <p class="help-text">Los archivos se guardarán en la ubicación que elijas o en tu carpeta de Descargas predeterminada.</p>
+        </div>
+        
         <div class="tip">
             <strong>💡 Consejo:</strong> Usa "Descarga Rápida" para obtener automáticamente la mejor calidad disponible (incluye 4K). Presiona Enter después de pegar la URL para iniciar.
         </div>
@@ -518,10 +565,32 @@
             title: document.getElementById('title'),
             author: document.getElementById('author'),
             duration: document.getElementById('duration'),
-            quality: document.getElementById('quality')
+            quality: document.getElementById('quality'),
+            downloadPath: document.getElementById('downloadPath'),
+            choosePath: document.getElementById('choosePath')
         };
         
         let currentUrl = '';
+        let directoryHandle = null;
+        
+        // File System Access API - Elegir carpeta
+        elements.choosePath.addEventListener('click', async () => {
+            try {
+                if ('showDirectoryPicker' in window) {
+                    directoryHandle = await window.showDirectoryPicker({
+                        mode: 'readwrite'
+                    });
+                    elements.downloadPath.value = directoryHandle.name;
+                    showSuccess(`📁 Carpeta seleccionada: ${directoryHandle.name}`);
+                } else {
+                    showError('Tu navegador no soporta selección de carpetas. Los archivos se guardarán en Descargas.');
+                }
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    console.error('Error al seleccionar carpeta:', error);
+                }
+            }
+        });
         
         // Verificar servidor
         async function checkServer() {
@@ -584,9 +653,6 @@
                 }
                 
                 const blob = await res.blob();
-                const downloadUrl = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = downloadUrl;
                 
                 // Obtener nombre del archivo
                 const contentDisposition = res.headers.get('Content-Disposition');
@@ -598,11 +664,8 @@
                     }
                 }
                 
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(downloadUrl);
+                // Guardar en ubicación personalizada o predeterminada
+                await saveFile(blob, filename);
                 
                 updateProgress(100);
                 showSuccess(`✅ ¡Video "${filename}" descargado exitosamente!`);
@@ -708,9 +771,6 @@
                 }
                 
                 const blob = await res.blob();
-                const downloadUrl = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = downloadUrl;
                 
                 const contentDisposition = res.headers.get('Content-Disposition');
                 let filename = `video_${Date.now()}.mp4`;
@@ -721,11 +781,8 @@
                     }
                 }
                 
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(downloadUrl);
+                // Guardar en ubicación personalizada o predeterminada
+                await saveFile(blob, filename);
                 
                 updateProgress(100);
                 showSuccess(`✅ ¡Video "${filename}" descargado!`);
@@ -746,6 +803,41 @@
                 elements.quickDownload.click();
             }
         });
+        
+        // Función para guardar archivo
+        async function saveFile(blob, filename) {
+            try {
+                if (directoryHandle && 'showDirectoryPicker' in window) {
+                    // Guardar en carpeta personalizada
+                    const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                    showSuccess(`✅ Guardado en: ${directoryHandle.name}/${filename}`);
+                } else {
+                    // Guardar en ubicación predeterminada (Descargas)
+                    const downloadUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(downloadUrl);
+                }
+            } catch (error) {
+                console.error('Error al guardar:', error);
+                // Fallback a descarga normal
+                const downloadUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(downloadUrl);
+            }
+        }
         
         // Utilidades
         function formatDuration(seconds) {
