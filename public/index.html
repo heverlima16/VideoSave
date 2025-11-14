@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VideoSave - Descargador Profesional</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&display=swap');
         
@@ -583,7 +584,7 @@
             </select>
             
             <button class="btn-download" id="download">
-                ⬇️ Descargar
+                ⬇️ Descargar Video
             </button>
         </div>
         
@@ -803,7 +804,7 @@
         elements.getInfo.addEventListener('click', async () => {
             const url = elements.url.value.trim();
             if (!url) {
-                showError('Por favor ingresa una URL de YouTube');
+                showError('Por favor ingresa una URL válida');
                 return;
             }
             
@@ -923,7 +924,7 @@
             }
         });
         
-        // Función para guardar archivo
+        // Función para guardar archivo - CORREGIDA
         async function saveFile(blob, filename) {
             try {
                 if (directoryHandle && 'showDirectoryPicker' in window) {
@@ -946,6 +947,7 @@
                 }
             } catch (error) {
                 console.error('Error al guardar:', error);
+                showError(`⚠️ No se pudo guardar en la carpeta seleccionada. Intentando descarga normal...`);
                 // Fallback a descarga normal
                 const downloadUrl = URL.createObjectURL(blob);
                 const a = document.createElement('a');
