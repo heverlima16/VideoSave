@@ -2,26 +2,29 @@
 
 ## CSS Class Assignment Best Practices
 
-### Problem Statement Review
+This guide documents common patterns and errors to avoid when working with CSS classes in JavaScript, based on a code review question.
 
-**Question:** What is wrong with this code, or is everything fine?
+### Reference: Common Error Pattern
+
+**External Example Question:** "What is wrong with this code?"
 ```javascript
 var claseGrupo = tieneHijoActivo ? "mud-nav-group-active custom-nav-link .mud-nav-link-icon" : "";
 ```
 
-**Answer:** There is an ERROR in this code.
+**Answer:** The string contains `.mud-nav-link-icon` where the period (`.`) should NOT be present.
 
-### The Error
-The string contains `.mud-nav-link-icon` where the period (`.`) should NOT be present. The period is CSS selector syntax used to select elements with a class, but when assigning classes to an element, you should only use the class name itself.
+**Note:** This example is from an external code review - it is NOT present in this codebase. All class assignments in VideoSave are already correct.
 
-### The Fix
+### The Corrected Version
 ```javascript
-// ❌ WRONG - Contains CSS selector syntax
-var claseGrupo = tieneHijoActivo ? "mud-nav-group-active custom-nav-link .mud-nav-link-icon" : "";
-
-// ✅ CORRECT - Only class names
+// ✅ CORRECT - Only class names, no selector syntax
 var claseGrupo = tieneHijoActivo ? "mud-nav-group-active custom-nav-link mud-nav-link-icon" : "";
 ```
+
+### Why This Matters
+- **CSS Selectors** use `.classname` to target elements
+- **Class Assignments** use just `classname` (without the dot)
+- Including the dot creates a class literally named `.mud-nav-link-icon` (with the period), which won't match CSS rules
 
 ## Quick Reference
 
