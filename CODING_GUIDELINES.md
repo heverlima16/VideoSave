@@ -80,7 +80,7 @@ When working with CSS classes in JavaScript:
 
 This type of error typically causes:
 - CSS styles not applying to elements
-- JavaScript class checks failing (`element.classList.contains("class-name")` would fail)
+- JavaScript class checks would fail (e.g., `element.classList.contains("class-name")` would not find the class)
 - Selector queries not finding the elements as expected
 - Unexpected behavior in UI frameworks (like MudBlazor, React, Vue, etc.)
 
