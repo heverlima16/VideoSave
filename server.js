@@ -56,7 +56,9 @@ app.post('/api/video-info', async (req, res) => {
         
         console.log(`Obteniendo información de ${platform}:`, cleanUrl);
         
-        const command = `yt-dlp --dump-json --no-playlist "${cleanUrl}"`;
+        const command = platform === 'youtube' 
+            ? `yt-dlp --dump-json --no-playlist --js-runtimes node:/usr/local/bin/node --extractor-args "youtube:player_client=android" --socket-timeout 30 "${cleanUrl}"`
+            : `yt-dlp --dump-json --no-playlist "${cleanUrl}"`;
         const { stdout } = await execPromise(command, { maxBuffer: 1024 * 1024 * 10 });
         const videoInfo = JSON.parse(stdout);
         
@@ -137,7 +139,7 @@ app.post('/api/quick-download', async (req, res) => {
         if (platform === 'tiktok') {
             command = `yt-dlp -f "best" -o "${outputTemplate}" "${cleanUrl}"`;
         } else {
-            command = `yt-dlp -f "bestvideo[ext=mp4][height<=2160]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${outputTemplate}" "${cleanUrl}"`;
+            command = `yt-dlp -f "bestvideo[ext=mp4][height<=2160]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 --js-runtimes node:/usr/local/bin/node --extractor-args "youtube:player_client=android" --socket-timeout 30 -o "${outputTemplate}" "${cleanUrl}"`;
         }
         
         await execPromise(command, { maxBuffer: 1024 * 1024 * 200 });
@@ -187,9 +189,9 @@ app.post('/api/download', async (req, res) => {
             }
         } else {
             if (format_id) {
-                command = `yt-dlp -f "${format_id}+bestaudio[ext=m4a]/bestaudio" --merge-output-format mp4 -o "${outputTemplate}" "${cleanUrl}"`;
+                command = `yt-dlp -f "${format_id}+bestaudio[ext=m4a]/bestaudio" --merge-output-format mp4 --js-runtimes node:/usr/local/bin/node --extractor-args "youtube:player_client=android" --socket-timeout 30 -o "${outputTemplate}" "${cleanUrl}"`;
             } else {
-                command = `yt-dlp -f "bestvideo[ext=mp4][height<=2160]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${outputTemplate}" "${cleanUrl}"`;
+                command = `yt-dlp -f "bestvideo[ext=mp4][height<=2160]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 --js-runtimes node:/usr/local/bin/node --extractor-args "youtube:player_client=android" --socket-timeout 30 -o "${outputTemplate}" "${cleanUrl}"`;
             }
         }
         
