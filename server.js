@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const archiver = require('archiver');
 
 const app = express();
 const PORT = 3000;
@@ -283,6 +284,262 @@ app.post('/api/download', async (req, res) => {
         if (!res.headersSent) res.status(500).json({ error: error.message });
     }
 });
+
+// ── Playlist / Collection ──────────────────────────────────────────────────
+
+function sanitizeName(name) {
+    return String(name || 'Coleccion')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+        .replace(/\s+/g, '_')
+        .replace(/^\.+/, '')
+        .slice(0, 80).trim() || 'Coleccion';
+}
+
+const QUALITY_FORMATS = {
+    '2160': 'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best',
+    '1080': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+    '720':  'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]',
+    '480':  'bestvideo[height<=480]+bestaudio/best[height<=480]',
+    '360':  'bestvideo[height<=360]+bestaudio/best[height<=360]',
+};
+
+// Spawn yt-dlp and emit each output line to a callback (for progress parsing)
+function spawnYtDlpStream(args, onLine, timeoutMs = 20 * 60 * 1000) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn('yt-dlp', args);
+        let buf = '', stderr = '';
+        const flush = (data) => {
+            buf += data.toString();
+            const parts = buf.split('\n');
+            buf = parts.pop();
+            parts.forEach(l => onLine(l));
+        };
+        proc.stderr.on('data', d => { flush(d); stderr += d.toString(); });
+        proc.stdout.on('data', d => flush(d));
+        const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('Tiempo de espera agotado')); }, timeoutMs);
+        proc.on('close', code => {
+            clearTimeout(timer);
+            if (buf) onLine(buf);
+            if (code === 0) resolve();
+            else reject(new Error(parseYtDlpError(stderr)));
+        });
+        proc.on('error', err => { clearTimeout(timer); reject(new Error(`yt-dlp no encontrado: ${err.message}`)); });
+    });
+}
+
+// Active download jobs
+const activeJobs = new Map();
+
+function jobEmit(job, event, data) {
+    const chunk = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    job.log.push(chunk);
+    job.clients.forEach(c => { try { c.write(chunk); } catch {} });
+}
+
+function resolveVideoUrl(entry) {
+    if (entry.webpage_url?.startsWith('http')) return entry.webpage_url;
+    if (entry.url?.startsWith('http')) return entry.url;
+    if (entry.id) {
+        const key = (entry.ie_key || '').toLowerCase();
+        if (key.includes('tiktok')) return `https://www.tiktok.com/video/${entry.id}`;
+        if (key.includes('instagram')) return `https://www.instagram.com/p/${entry.id}/`;
+        return `https://www.youtube.com/watch?v=${entry.id}`;
+    }
+    return null;
+}
+
+async function runPlaylistJob(jobId, url, limit, formatStr, safeTitle) {
+    const job = activeJobs.get(jobId);
+    if (!job) return;
+
+    const playlistDir = path.join(DOWNLOADS_DIR, `playlist_${jobId}`);
+    const zipPath    = path.join(DOWNLOADS_DIR, `playlist_${jobId}.zip`);
+
+    try {
+        fs.mkdirSync(playlistDir, { recursive: true });
+
+        // 1. Get playlist entries
+        jobEmit(job, 'status', { message: 'Obteniendo lista de videos...' });
+        const infoOut = await spawnYtDlp(
+            ['--flat-playlist', '--dump-single-json', '--no-warnings', '--ignore-errors', url],
+            120000
+        );
+        const data = JSON.parse(infoOut.trim());
+        const rawEntries = (data._type === 'playlist' || data.entries) ? (data.entries || []) : [data];
+        const entries = rawEntries.filter(Boolean).slice(0, limit);
+
+        if (!entries.length) throw new Error('No se encontraron videos en esta colección');
+
+        if (!safeTitle || safeTitle === 'Coleccion') {
+            safeTitle = sanitizeName(data.title || 'Coleccion');
+            job.safeTitle = safeTitle;
+        }
+
+        jobEmit(job, 'playlist', {
+            total: entries.length,
+            title: data.title || 'Colección',
+            videos: entries.map((e, i) => ({ index: i + 1, title: e.title || `Video ${i + 1}` }))
+        });
+
+        // 2. Download one by one
+        let downloaded = 0;
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            const idx   = i + 1;
+            const title = entry.title || `Video ${idx}`;
+            const videoUrl = resolveVideoUrl(entry);
+
+            if (!videoUrl) {
+                jobEmit(job, 'video_error', { index: idx, title, error: 'URL no disponible' });
+                continue;
+            }
+
+            jobEmit(job, 'video_start', { index: idx, total: entries.length, title });
+
+            try {
+                const out = path.join(playlistDir, `${String(idx).padStart(2, '0')}_%(title)s.%(ext)s`);
+                await spawnYtDlpStream(
+                    ['-f', formatStr, '--merge-output-format', 'mp4', '--no-warnings', '--restrict-filenames', '-o', out, videoUrl],
+                    (line) => {
+                        // "[download]  45.2% of 1.23GiB at 5.00MiB/s ETA 00:30"
+                        const m = line.match(/\[download\]\s+([\d.]+)%(?:.*?at\s+(\S+))?(?:.*?ETA\s+(\S+))?/);
+                        if (m) jobEmit(job, 'video_progress', { index: idx, percent: parseFloat(m[1]), speed: m[2] || null, eta: m[3] || null });
+                    },
+                    30 * 60 * 1000
+                );
+                downloaded++;
+                jobEmit(job, 'video_done', { index: idx, title });
+            } catch (err) {
+                jobEmit(job, 'video_error', { index: idx, title, error: err.message });
+            }
+        }
+
+        if (downloaded === 0) throw new Error('No se pudo descargar ningún video');
+
+        // 3. Zip
+        jobEmit(job, 'zip_start', { downloaded, total: entries.length });
+        await new Promise((resolve, reject) => {
+            const output  = fs.createWriteStream(zipPath);
+            const archive = archiver('zip', { zlib: { level: 0 } });
+            output.on('close', resolve);
+            archive.on('error', reject);
+            archive.pipe(output);
+            archive.directory(playlistDir, safeTitle);
+            archive.finalize();
+        });
+
+        job.zipPath = zipPath;
+        job.status  = 'done';
+        jobEmit(job, 'done', { filename: `${safeTitle}.zip`, downloaded, total: entries.length });
+
+    } catch (err) {
+        console.error(`[job ${jobId}]`, err.message);
+        job.status = 'error';
+        jobEmit(job, 'job_error', { message: err.message });
+    } finally {
+        fs.rm(playlistDir, { recursive: true, force: true }, () => {});
+        job.clients.forEach(c => { try { c.end(); } catch {} });
+        job.clients = [];
+        // Auto-clean after 1 h
+        setTimeout(() => {
+            const j = activeJobs.get(jobId);
+            if (j?.zipPath) fs.unlink(j.zipPath, () => {});
+            activeJobs.delete(jobId);
+        }, 60 * 60 * 1000);
+    }
+}
+
+app.post('/api/playlist-job', async (req, res) => {
+    try {
+        const { url, max_videos = 10, quality = 'best', playlist_title = '' } = req.body;
+        if (!url) return res.status(400).json({ error: 'URL requerida' });
+
+        const validUrl  = validateUrl(url);
+        const limit     = Math.min(Math.max(1, parseInt(max_videos) || 10), 50);
+        const formatStr = QUALITY_FORMATS[String(quality)] || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
+        const safeTitle = sanitizeName(playlist_title || 'Coleccion');
+        const jobId     = crypto.randomBytes(8).toString('hex');
+
+        activeJobs.set(jobId, { clients: [], log: [], status: 'running', zipPath: null, safeTitle });
+        runPlaylistJob(jobId, validUrl, limit, formatStr, safeTitle); // fire & forget
+
+        res.json({ jobId });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.get('/api/playlist-progress/:jobId', (req, res) => {
+    const job = activeJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job no encontrado' });
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    job.log.forEach(chunk => { try { res.write(chunk); } catch {} });
+    if (job.status !== 'running') { res.end(); return; }
+
+    job.clients.push(res);
+    req.on('close', () => { job.clients = job.clients.filter(c => c !== res); });
+});
+
+app.get('/api/playlist-file/:jobId', (req, res) => {
+    const job = activeJobs.get(req.params.jobId);
+    if (!job?.zipPath || job.status !== 'done') return res.status(404).json({ error: 'Archivo no disponible' });
+    res.download(job.zipPath, `${job.safeTitle}.zip`, err => {
+        if (err) console.error('[playlist-file]', err.message);
+    });
+});
+
+app.post('/api/playlist-info', async (req, res) => {
+    try {
+        const { url } = req.body;
+        if (!url) return res.status(400).json({ error: 'URL requerida' });
+
+        const validUrl = validateUrl(url);
+        console.log(`[playlist-info] ${validUrl}`);
+
+        // --dump-single-json emits ONE JSON object (playlist or video), never mixed lines
+        const stdout = await spawnYtDlp([
+            '--flat-playlist',
+            '--dump-single-json',
+            '--no-warnings',
+            '--ignore-errors',
+            validUrl
+        ], 120000);
+
+        const data = JSON.parse(stdout.trim());
+
+        // Playlist → data.entries array; single video → wrap it
+        const rawEntries = (data._type === 'playlist' || data.entries)
+            ? (data.entries || [])
+            : [data];
+
+        const entries = rawEntries.filter(Boolean);
+        if (entries.length === 0) return res.status(400).json({ error: 'No se encontraron videos en esta colección' });
+
+        const playlistTitle = data.title || data.playlist_title || 'Colección';
+
+        res.json({
+            count: entries.length,
+            playlist_title: playlistTitle,
+            entries: entries.slice(0, 50).map((e, i) => ({
+                index: i + 1,
+                id: e.id,
+                title: e.title || 'Sin título',
+                duration: e.duration || null,
+                thumbnail: e.thumbnail || null,
+            }))
+        });
+    } catch (error) {
+        console.error('[playlist-info]', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 
 app.get('/api/health', (_req, res) => res.json({ status: 'OK' }));
 
